@@ -1,180 +1,249 @@
-# 🛒 E-Commerce Dynamic Pricing Optimization
-### End-to-End MLOps Project | Causal ML + Price Elasticity + FastAPI Deployment
+# E-Commerce Dynamic Pricing Optimization
 
-> **Background note:** This project is intentionally designed to leverage my BA in Economics & Business training.
-> Price elasticity, endogeneity correction, and causal inference are Economics concepts first —
-> the ML is the tooling that makes them scalable.
+> Causal ML-powered demand forecasting and revenue-optimal pricing for large-scale retail —
+> **30% revenue lift** across 49,677 SKUs using Double Machine Learning for unbiased elasticity estimation.
 
 ---
 
-## 📐 Project Architecture
+## Results Summary
+
+| Model | MAPE | R² | vs Baseline |
+|---|---|---|---|
+| Ridge Regression (baseline) | 0.4292 | 0.0176 | — |
+| Deep & Cross Network (DCN) | 0.4243 | 0.0319 | +81% R² |
+| **LightGBM (tuned)** | **0.4177** | **0.0553** | **+214% R²** |
+
+| Business Metric | Value |
+|---|---|
+| Revenue lift (pricing optimizer) | **+30.0%** |
+| Price elasticity ATE (DML) | −0.083 |
+| Endogeneity bias corrected | 0.087 |
+| SKUs optimized | 49,677 |
+| Transactions in training set | 32,434,489 |
+| Departments covered | 21 |
+
+---
+
+## Project Overview
+
+Standard demand models suffer from **price endogeneity** — prices are set in response to demand signals, so naive OLS estimates of elasticity are biased upward. This project applies the **Frisch-Waugh-Lovell theorem via Double Machine Learning (DML)** to partial out confounders and recover unbiased conditional average treatment effects (CATEs) of price on demand.
+
+The resulting elasticity estimates feed a constrained revenue optimizer that recommends prices subject to:
+- Margin floor: `P ≥ cost / (1 − min_margin)`
+- Guardrail: `|ΔP / P| ≤ max_change_pct`
+
+All predictions are served through a production-ready FastAPI service with Prometheus metrics and Pydantic v2 validation.
+
+---
+
+## Economics Background
+
+The demand model uses a **log-log specification**:
 
 ```
-ecom_pricing/
-├── data/
-│   ├── raw/               # Original, immutable data (versioned with DVC)
-│   ├── processed/         # Cleaned, feature-engineered datasets
-│   └── external/          # Competitor prices, macroeconomic data
-│
-├── notebooks/
-│   ├── 01_eda.ipynb                    # Exploratory Data Analysis
-│   ├── 02_feature_engineering.ipynb    # Feature construction & pipelines
-│   ├── 03_baseline_models.ipynb        # OLS, log-log elasticity models
-│   ├── 04_causal_ml_dml.ipynb          # Double Machine Learning (EconML)
-│   ├── 05_deep_learning_dcn.ipynb      # Deep & Cross Network (PyTorch)
-│   ├── 06_hyperparameter_tuning.ipynb  # Optuna + multi-objective HPO
-│   ├── 07_pricing_optimizer.ipynb      # Downstream price optimization
-│   └── 08_model_evaluation.ipynb       # SHAP, calibration, A/B simulation
-│
-├── src/
-│   ├── features/
-│   │   ├── __init__.py
-│   │   ├── pipeline.py        # Scikit-learn preprocessing pipelines
-│   │   ├── engineering.py     # Domain feature creation functions
-│   │   └── feature_store.py   # Feast feature store integration
-│   │
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── elasticity_ols.py  # Log-log OLS baseline
-│   │   ├── causal_dml.py      # Double ML via EconML
-│   │   ├── dcn_model.py       # Deep & Cross Network (PyTorch)
-│   │   └── optimizer.py       # Constrained price optimizer
-│   │
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── main.py            # FastAPI application
-│   │   ├── schemas.py         # Pydantic request/response models
-│   │   └── predict.py         # Inference logic
-│   │
-│   └── monitoring/
-│       ├── __init__.py
-│       ├── drift_detector.py  # Evidently AI drift reports
-│       └── metrics_logger.py  # Prometheus metrics
-│
-├── tests/
-│   ├── test_features.py
-│   ├── test_models.py
-│   ├── test_api.py
-│   └── test_guardrails.py     # Pricing guardrail validation
-│
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-│
-├── configs/
-│   ├── config.yaml            # Project-wide configuration
-│   ├── model_config.yaml      # Model hyperparameters
-│   └── monitoring_config.yaml # Drift thresholds
-│
-├── .github/
-│   └── workflows/
-│       └── ci_cd.yml          # GitHub Actions pipeline
-│
-├── .vscode/
-│   ├── settings.json          # VS Code workspace settings
-│   ├── extensions.json        # Recommended extensions
-│   └── launch.json            # Debug configurations
-│
-├── docs/
-│   └── economics_primer.md    # Elasticity & causal ML concepts
-│
-├── .env.example               # Environment variable template
-├── .gitignore
-├── dvc.yaml                   # DVC pipeline definition
-├── pyproject.toml             # Project metadata & tool config
-├── requirements.txt           # Production dependencies
-├── requirements-dev.txt       # Development dependencies
-└── setup.py                   # Package installation
+log(Q) = α + β·log(P) + γ·X + ε
+```
+
+where `β` is directly interpretable as the price elasticity of demand. The unconstrained revenue-maximising price is:
+
+```
+P* = MC · ε / (ε + 1)    [standard monopoly pricing formula]
+```
+
+The optimizer finds this numerically via `scipy.optimize.minimize_scalar`, allowing the demand surface to be arbitrarily non-linear (non-constant elasticity across contexts).
+
+**DML identification strategy:**
+1. Regress `log(P)` on controls `X` → get residual `Ṽ`
+2. Regress `log(Q)` on controls `X` → get residual `Ỹ`  
+3. Regress `Ỹ` on `Ṽ` → coefficient is the unbiased elasticity `θ`
+
+This removes the endogeneity bias of 0.087 observed in the naive OLS estimate.
+
+---
+
+## Model Pipeline
+
+```
+Raw Transactions (32.4M rows)
+        │
+        ▼
+Feature Engineering
+  log_price, price_ratio, competitor_price,
+  demand lags (7d, 30d rolling), temporal features
+        │
+        ├──► Ridge Regression (baseline)     MAPE=0.4292, R²=0.0176
+        │
+        ├──► Deep & Cross Network (PyTorch)  MAPE=0.4243, R²=0.0319
+        │      cross_layers=3, deep=[256,128,64]
+        │
+        ├──► LightGBM (Optuna HPO) ✓ best   MAPE=0.4177, R²=0.0553
+        │      500 estimators, log-log space
+        │
+        └──► Double ML (EconML)              ATE=−0.083, bias corrected
+               treatment=log_price, outcome=log_demand
+                        │
+                        ▼
+              Pricing Optimizer
+              scipy.minimize_scalar
+              Revenue lift: +30%
 ```
 
 ---
 
-## 🚀 Quick Start (5 minutes)
+## API Endpoints
 
-### Prerequisites
-- Python 3.11+
-- VS Code with recommended extensions (see `.vscode/extensions.json`)
-- Docker Desktop
-- Git
+```
+POST /demand-forecast        # Predict units sold at given price + context
+POST /optimal-price          # Revenue-maximising price within guardrails
+POST /elasticity             # Price elasticity CATE from DML model
+POST /demand-forecast/batch  # Batch forecast up to 1,000 SKUs
+GET  /health                 # Liveness probe
+GET  /metrics                # Prometheus metrics
+```
 
-### 1. Clone & Environment Setup
+### Quick Start
+
 ```bash
-# Clone your repo
-git clone https://github.com/chikuphuka11/ecom_dynamic_pricing_optimisation.git
-cd ecom-dynamic-pricing
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate        # macOS/Linux
-# OR
-.venv\Scripts\activate           # Windows
-
 # Install dependencies
-pip install -r requirements-dev.txt
-pip install -e .                 # Install project as editable package
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+pip install -r requirements.txt
+
+# Run the API
+cd src
+uvicorn api.main:app --reload --port 8000
+
+# Interactive docs
+open http://localhost:8000/docs
 ```
 
-### 2. Configure Environment
+### Example Request
+
 ```bash
-cp .env.example .env
-# Edit .env with your API keys (Kaggle, MLflow tracking URI, etc.)
+curl -X POST http://localhost:8000/demand-forecast \
+  -H "Content-Type: application/json" \
+  -d '{
+    "product_id": "prod_00123",
+    "department": "beverages",
+    "price": 4.99,
+    "date": "2024-11-01",
+    "competitor_price": 5.29,
+    "inventory_level": 150,
+    "demand_lag_7d": 45.2,
+    "demand_rolling_mean_30d": 42.8
+  }'
 ```
 
-### 3. Pull Data with DVC
-```bash
-dvc pull                         # Pulls data from configured remote
-# OR to download fresh from Kaggle:
-python scripts/download_data.py
+```json
+{
+  "product_id": "prod_00123",
+  "price": 4.99,
+  "predicted_units": 48.3,
+  "prediction_lower": 29.1,
+  "prediction_upper": 80.2,
+  "model_version": "1.0.0"
+}
 ```
 
-### 4. Run Notebooks in Order
+---
+
+## Repository Structure
+
 ```
-notebooks/01_eda.ipynb  →  02  →  03  →  04  →  05  →  06  →  07  →  08
+ecom_dynamic_pricing_optimization/
+├── src/
+│   ├── api/
+│   │   ├── main.py          # FastAPI app, routes, Prometheus metrics
+│   │   ├── predict.py       # DemandPredictor: inference + optimization
+│   │   └── schemas.py       # Pydantic v2 request/response models
+│   ├── features/
+│   │   └── pipeline.py      # Feature engineering pipeline
+│   ├── models/
+│   │   └── causal_dml.py    # Double ML elasticity estimator
+│   └── monitoring/
+│       └── drift_detector.py # Data drift detection (Evidently)
+├── notebooks/
+│   ├── 01_eda.ipynb
+│   ├── 02_feature_engineering.ipynb
+│   ├── 03_baseline_models.ipynb
+│   ├── 04_causal_ml_dml.ipynb
+│   ├── 05_deep_learning_dcn.ipynb
+│   ├── 06_hyperparameter_tuning.ipynb
+│   ├── 07_pricing_optimizer.ipynb
+│   └── 08_model_evaluation.ipynb
+├── tests/
+│   ├── conftest.py          # TestClient fixture with demo predictor
+│   ├── test_api.py          # API endpoint tests (11 tests)
+│   └── test_guardrails.py   # Business guardrail tests (32 tests)
+├── data/processed/
+│   ├── final_evaluation_report.png
+│   ├── hpo_results.png
+│   ├── pricing_optimizer_results.png
+│   └── *.json               # Experiment result summaries
+├── configs/config.yaml
+├── requirements.txt
+└── pyproject.toml
 ```
 
-### 5. Start MLflow UI
+---
+
+## Experiment Tracking
+
+All experiments tracked in MLflow across 6 experiments:
+
 ```bash
 mlflow ui --port 5000
 # Open http://localhost:5000
 ```
 
-### 6. Launch API locally
+| Experiment | Run | Key Metric |
+|---|---|---|
+| `01_baseline` | ridge_regression_baseline | R²=0.0176 |
+| `02_deep_learning_dcn` | dcn_best | R²=0.0319 |
+| `03_hyperparameter_tuning` | lgbm_optuna_best | R²=0.0553 |
+| `04_causal_dml` | double_ml_elasticity | ATE=−0.083 |
+| `05_pricing_optimizer` | revenue_optimization | lift=+30% |
+| `06_model_evaluation` | final_evaluation_all_models | all metrics |
+
+---
+
+## Testing
+
 ```bash
-uvicorn src.api.main:app --reload --port 8000
-# Docs at http://localhost:8000/docs
+$env:PYTHONPATH = "src"
+python -m pytest tests/ -v --cov=src --cov-report=term-missing
+```
+
+```
+43 passed in 4.7s  |  Coverage: 39%
+├── test_api.py         11/11 ✅  endpoint correctness, schema validation
+└── test_guardrails.py  32/32 ✅  margin floors, guardrail bounds, elasticity sanity
 ```
 
 ---
 
-## 🧠 Economics Background — Why This Project Suits You
+## Dataset
 
-| Economics Concept | How It Appears in This Project |
+Based on the [Instacart Market Basket Analysis](https://www.kaggle.com/c/instacart-market-basket-analysis) dataset, augmented with synthetic pricing signals to simulate a realistic dynamic pricing environment.
+
+| Statistic | Value |
 |---|---|
-| **Price Elasticity of Demand** | The regression target — we model ∂log(Q)/∂log(P) |
-| **Endogeneity** | Prices are set based on demand → OLS is biased → we use Double ML |
-| **Instrumental Variables** | DML's first stage is analogous to 2SLS — partials out confounders |
-| **Marginal Revenue = Marginal Cost** | The optimizer finds this point subject to constraints |
-| **Consumer Surplus** | Monitored as a fairness metric — we don't extract all surplus |
-| **Market Structure** | Competitor pricing features capture oligopolistic interdependence |
-| **Revealed Preference** | Transaction data reveals willingness-to-pay empirically |
+| Total transactions | 32,434,489 |
+| Unique products (SKUs) | 49,677 |
+| Departments | 21 |
+| Aisles | 134 |
 
 ---
 
-## 📊 Key Results (Target Benchmarks)
+## Tech Stack
 
-| Metric | Baseline (Static Pricing) | This Model |
-|---|---|---|
-| MAPE on demand forecast | — | < 12% |
-| Revenue lift (A/B test) | 0% | +3–5% |
-| Price update frequency | Manual (weekly) | Every 15 min |
-| SKUs covered | Top 1,000 only | All active SKUs |
-| Overstock reduction | — | ~8% |
-
----
-
-## 📚 References
-
-- Chernozhukov et al. (2018) — *Double/Debiased Machine Learning* (the DML paper)
-- Wang & Rossi (2019) — *Causal Inference for Pricing Analytics*
-- EconML Documentation — https://econml.azurewebsites.net/
-- Kaggle Instacart Dataset — https://www.kaggle.com/c/instacart-market-basket-analysis
+| Layer | Technology |
+|---|---|
+| ML models | LightGBM, PyTorch, EconML (DML) |
+| HPO | Optuna |
+| API | FastAPI + Pydantic v2 + Uvicorn |
+| Optimization | scipy.optimize |
+| Experiment tracking | MLflow |
+| Monitoring | Prometheus + Evidently |
+| Testing | pytest + pytest-cov |
+| Feature pipeline | scikit-learn |
