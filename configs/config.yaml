@@ -1,0 +1,113 @@
+# configs/config.yaml
+# Central configuration — all paths and settings referenced from here
+
+project:
+  name: "ecom-dynamic-pricing"
+  version: "0.1.0"
+  random_seed: 42
+
+# ─── Data ─────────────────────────────────────────────────────────────────────
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  external_dir: "data/external"
+
+  # Key datasets (downloaded via scripts/download_data.py)
+  instacart_orders: "data/raw/instacart/orders.csv"
+  instacart_products: "data/raw/instacart/products.csv"
+  instacart_order_products: "data/raw/instacart/order_products__prior.csv"
+  rossmann_train: "data/raw/rossmann/train.csv"
+
+  # Processed outputs
+  features_parquet: "data/processed/features.parquet"
+  train_parquet: "data/processed/train.parquet"
+  val_parquet: "data/processed/val.parquet"
+  test_parquet: "data/processed/test.parquet"
+  reference_data: "data/processed/reference_data.parquet"  # For drift monitoring
+
+# ─── Features ─────────────────────────────────────────────────────────────────
+features:
+  target_col: "units_sold"
+  price_col: "price"
+  date_col: "date"
+  sku_col: "product_id"
+  category_col: "department"
+
+  # Rolling window sizes (in days) for aggregation features
+  rolling_windows: [7, 14, 30, 90]
+
+  # Lag features (in days)
+  lag_days: [1, 7, 14, 28]
+
+  # High-cardinality columns to target-encode
+  target_encode_cols: ["product_id", "department", "aisle_id"]
+
+  # Price guardrails — no prediction outside these bounds triggers alert
+  max_price_change_pct: 0.30   # Max ±30% from current price
+  min_margin_pct: 0.10         # Must maintain 10% gross margin floor
+
+# ─── Model ────────────────────────────────────────────────────────────────────
+model:
+  # Training split strategy
+  train_end_date: "2024-06-30"
+  val_start_date: "2024-07-01"
+  val_end_date: "2024-09-30"
+  test_start_date: "2024-10-01"
+
+  # Cross-validation
+  n_cv_folds: 5
+  cv_strategy: "time_series"   # options: "time_series", "stratified", "group"
+  gap_days: 7                  # Gap between train and val in time-series CV
+
+  # Experiment tracking
+  mlflow_tracking_uri: "sqlite:///mlflow.db"
+  mlflow_experiment_name: "ecom-dynamic-pricing"
+  artifact_store: "mlruns"
+
+# ─── DML (Double Machine Learning) ───────────────────────────────────────────
+dml:
+  # First stage models (nuisance models — your Econ background: this is like 2SLS)
+  model_y: "lightgbm"          # Predicts E[Y | X, W] — demand given controls
+  model_t: "lightgbm"          # Predicts E[T | X, W] — price given controls
+  # Final stage: regresses residuals of Y on residuals of T
+  model_final: "lightgbm"
+  n_splits: 5                   # Cross-fitting folds (crucial for valid inference)
+  featurizer: null               # Optional: polynomial features on X
+
+# ─── API ──────────────────────────────────────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  timeout_seconds: 30
+  max_request_batch_size: 1000
+
+  # Model paths (updated by CI/CD on new deployment)
+  model_path: "models/production/demand_model.pkl"
+  pipeline_path: "models/production/preprocessing_pipeline.pkl"
+  dml_model_path: "models/production/dml_model.pkl"
+
+  # Redis cache
+  cache_ttl_seconds: 900        # 15 minutes — matches price update frequency
+  redis_url: "redis://localhost:6379/0"
+
+# ─── Monitoring ───────────────────────────────────────────────────────────────
+monitoring:
+  # Drift thresholds (PSI = Population Stability Index)
+  psi_warning_threshold: 0.10
+  psi_alert_threshold: 0.20
+
+  # Performance thresholds
+  mape_warning_threshold: 0.15  # Warn if MAPE > 15%
+  mape_alert_threshold: 0.25    # Alert + trigger retraining if > 25%
+
+  # Monitoring frequency
+  drift_check_interval_hours: 24
+  performance_check_interval_hours: 6
+
+  # Retraining trigger
+  auto_retrain_on_alert: true
+  min_new_samples_for_retrain: 10000
+
+  # Reports output
+  reports_dir: "monitoring/reports"

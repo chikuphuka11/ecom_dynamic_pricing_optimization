@@ -1,0 +1,7 @@
+{
+  "naive_ols_elasticity": 0.004513,
+  "ols_controls_elasticity": 0.005841,
+  "ridge_elasticity": 0.005419,
+  "ridge_mape": 0.429232,
+  "ridge_r2": 0.017611
+}

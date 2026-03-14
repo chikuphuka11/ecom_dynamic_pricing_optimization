@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing & coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Model artifacts & large binaries
+models/production/
+*.pkl
+*.pt
+
+# MLflow runs (local only)
+mlruns/
+
+# Data files
+data/processed/*.parquet
+data/*.csv
+data/processed/*.parquet
+
+# Misc scripts
+log_to_mlflow.py
+
+# IDE
+.vscode/
