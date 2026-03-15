@@ -151,9 +151,8 @@ class PriceElasticityModel:
         self.model = LinearDML(
             model_y=model_y,
             model_t=model_t,
-            model_final=LassoCV(cv=5),   # Sparse final model for feature selection
-            cv=self.n_splits,            # Cross-fitting folds
-            discrete_treatment=False,    # Price is continuous
+            cv=self.n_splits,
+            discrete_treatment=False,
             random_state=self.random_state,
         )
 
