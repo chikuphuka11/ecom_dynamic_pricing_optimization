@@ -1,0 +1,33 @@
+# Step 1 — Recreate .gitignore
+@"
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Models & data
+/models/
+mlruns/
+data/processed/*.parquet
+data/*.csv
+data/orders.csv
+data/order_products__prior.csv
+
+# Misc
+log_to_mlflow.py
+.vscode/
+
+# OS
+.DS_Store
+"@ | Set-Content .gitignore
+
+# Step 2 — Verify it was created
+Get-Content .gitignore
